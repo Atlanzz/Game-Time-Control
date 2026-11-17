@@ -1,17 +1,8 @@
+
 const mysql = require("mysql2/promise");
 const bcrypt = require("bcryptjs");
 
-const DB_HOST = process.env.DB_HOST || "localhost";
-const DB_PORT = Number(process.env.DB_PORT) || 3306;
-const DB_USER = process.env.DB_USER || "root";
-const DB_PASSWORD = process.env.DB_PASSWORD || "";
-const DB_NAME = process.env.DB_NAME || "game_time_control";
-
 let pool = null;
-
-function getPool() {
-  return pool;
-}
 
 const defaultGames = [
   {
@@ -73,102 +64,47 @@ const defaultGames = [
 ];
 
 async function initDatabase() {
-  if (!/^[a-zA-Z0-9_]+$/.test(DB_NAME)) {
-    throw new Error("DB_NAME hanya boleh berisi huruf, angka, dan underscore.");
-  }
+  if (pool) return;
 
-  // 1. Buat database jika belum ada
-  const connection = await mysql.createConnection({
-    host: DB_HOST,
-    port: DB_PORT,
-    user: DB_USER,
-    password: DB_PASSWORD,
-  });
-
-  await connection.query(
-    `CREATE DATABASE IF NOT EXISTS \`${DB_NAME}\` CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci`,
-  );
-  await connection.end();
-
-  // 2. Pool koneksi
   pool = mysql.createPool({
-    host: DB_HOST,
-    port: DB_PORT,
-    user: DB_USER,
-    password: DB_PASSWORD,
-    database: DB_NAME,
+    host: process.env.DB_HOST,
+    port: Number(process.env.DB_PORT) || 4000,
+    user: process.env.DB_USER,
+    password: process.env.DB_PASSWORD,
+    database: process.env.DB_NAME || "game_time_control",
+    ssl: {
+      rejectUnauthorized: true,
+    },
     waitForConnections: true,
-    connectionLimit: 10,
+    connectionLimit: 5,
+    maxIdle: 2,
+    idleTimeout: 60000,
+    enableKeepAlive: true,
     charset: "utf8mb4",
   });
 
-  // 3. Buat tabel
-  await pool.query(`
-    CREATE TABLE IF NOT EXISTS users (
-      id INT AUTO_INCREMENT PRIMARY KEY,
-      username VARCHAR(50) NOT NULL UNIQUE,
-      name VARCHAR(100) NOT NULL,
-      email VARCHAR(120) NOT NULL UNIQUE,
-      password_hash VARCHAR(100) NOT NULL,
-      role ENUM('admin', 'user') NOT NULL DEFAULT 'user',
-      bio TEXT,
-      photo LONGTEXT,
-      created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-    ) ENGINE=InnoDB
-  `);
+  // Pastikan koneksi database berhasil.
+  await pool.query("SELECT 1");
 
-  await pool.query(`
-    CREATE TABLE IF NOT EXISTS games (
-      id INT AUTO_INCREMENT PRIMARY KEY,
-      name VARCHAR(100) NOT NULL,
-      genre VARCHAR(50) NOT NULL,
-      description TEXT NOT NULL,
-      image LONGTEXT,
-      created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-    ) ENGINE=InnoDB
-  `);
+  // Isi data game awal jika tabel masih kosong.
+  const [gameCount] = await pool.query(
+    "SELECT COUNT(*) AS total FROM games"
+  );
 
-  await pool.query(`
-    CREATE TABLE IF NOT EXISTS history (
-      id INT AUTO_INCREMENT PRIMARY KEY,
-      user_id INT NOT NULL,
-      game_name VARCHAR(100) NOT NULL,
-      played_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-      duration INT NOT NULL DEFAULT 0,
-      status VARCHAR(30) NOT NULL DEFAULT 'Sedang bermain',
-      FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
-    ) ENGINE=InnoDB
-  `);
-
-  // 4. Data awal (hanya jika masih kosong)
-  const [userCount] = await pool.query("SELECT COUNT(*) AS total FROM users");
-
-  if (userCount[0].total === 0) {
-    const adminHash = await bcrypt.hash("admin123", 10);
-    const playerHash = await bcrypt.hash("player123", 10);
-
+  if (Number(gameCount[0].total) === 0) {
     await pool.query(
-      "INSERT INTO users (username, name, email, password_hash, role, bio, photo) VALUES ?",
-      [
-        [
-          ["admin", "Administrator", "admin@example.com", adminHash, "admin", "Administrator Game Time Control", ""],
-          ["player", "Player", "player@example.com", playerHash, "user", "Game Time Control Player", ""],
-        ],
-      ],
+      "INSERT INTO games (name, genre, description, image) VALUES ?",
+      [defaultGames.map((g) => [g.name, g.genre, g.description, g.image])]
     );
-
-    console.log("Akun demo dibuat: admin / admin123 dan player / player123");
+    console.log("Data game awal berhasil dibuat.");
   }
+}
 
-  const [gameCount] = await pool.query("SELECT COUNT(*) AS total FROM games");
-
-  if (gameCount[0].total === 0) {
-    await pool.query("INSERT INTO games (name, genre, description, image) VALUES ?", [
-      defaultGames.map((g) => [g.name, g.genre, g.description, g.image]),
-    ]);
-
-    console.log("Data game awal dibuat.");
+function getPool() {
+  if (!pool) {
+    throw new Error("Database belum diinisialisasi.");
   }
+  return pool;
 }
 
 module.exports = { initDatabase, getPool };
